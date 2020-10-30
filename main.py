@@ -3,6 +3,10 @@ from pyzaim import ZaimCrawler
 import pandas as pd
 import datetime
 
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from gspread_dataframe import get_as_dataframe, set_with_dataframe
+
 
 def cleanUp(data, config):
     pd_data = pd.DataFrame(data)  # 取得したデータをDataFrame型へ変換
@@ -38,9 +42,44 @@ def main():
         # progressをFalseにするとプログレスバーを非表示にできる
         data = crawler.get_data(config['year'], config['month'], progress=True)
 
-        # データ整形
-        pd_data = cleanUp(data, config)
-
-    # 終了処理
+    # seleniumを閉じる
     finally:
         crawler.close()
+
+    # データ整形
+    pd_data = cleanUp(data, config)
+
+    # 2つのAPIを記述しないとリフレッシュトークンを3600秒毎に発行し続けなければならない
+    scope = ['https://spreadsheets.google.com/feeds',
+             'https://www.googleapis.com/auth/drive']
+
+    # 認証情報設定
+    # ダウンロードしたjsonファイル名をクレデンシャル変数に設定（秘密鍵、Pythonファイルから読み込みしやすい位置に置く）
+    credentials = ServiceAccountCredentials.from_json_keyfile_name(
+        config['secret'], scope)
+
+    # OAuth2の資格情報を使用してGoogle APIにログインします。
+    gc = gspread.authorize(credentials)
+
+    # 共有設定したスプレッドシートキーを変数[SPREADSHEET_KEY]に格納する。
+    SPREADSHEET_KEY = config['sheet']
+
+    sheet_name = str(config['year'])+str(config['month']).zfill(2)
+
+    # 共有設定したスプレッドシートのシート1を開く
+    spread = gc.open_by_key(SPREADSHEET_KEY)
+    worksheets = spread.worksheets()
+    flg = False
+    for worksheet in worksheets:
+        if worksheet.title == sheet_name:
+            flg = True
+    if flg:
+        ws = spread.worksheet(sheet_name)
+    else:
+        ws = spread.add_worksheet(sheet_name, rows=str(
+            pd_data.shape[0]+10), cols=str(pd_data.shape[1]))
+
+    set_with_dataframe(ws, pd_data)
+
+
+main()
