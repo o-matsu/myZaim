@@ -1,4 +1,5 @@
 import yaml
+import re
 from pyzaim import ZaimCrawler
 import pandas as pd
 import datetime
@@ -7,19 +8,41 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
+def cancatNote(x):
+    tmp = x['name'] + ' | ' if x['name']!='' else ''
+    tmp += x.comment + ' | ' if x.comment!='' else ''
+    tmp += x.place
+    return tmp
 
 def cleanUp(data, config):
     pd_data = pd.DataFrame(data)  # 取得したデータをDataFrame型へ変換
 
-    pd_data = pd_data.query("count=='常に含める'")  # 計上しない取引を削除する（銀行間の移動など）
-    pd_data['income'] = pd_data['amount'].where(
-        pd_data['type'] == 'income', 0)  # 入金額の列を加える
-    pd_data.loc[pd_data['type'] == 'income', [
-        'amount']] = 0  # 入金の場合はamountを0にする
-    pd_data = pd_data.drop(['count', 'type'], axis=1)  # 不要な列を削除する
+
+    #--- データ整形 ---
+
+    # 計上する取引だけを抽出する（銀行間の移動等は除外）
+    pd_data = pd_data.query("count=='常に含める'")
+    # 入金額の列を加える
+    pd_data['income'] = pd_data['amount'].where(pd_data['type'] == 'income', 0)
+    # 入金の場合はamountを0にする
+    pd_data.loc[pd_data['type'] == 'income', ['amount']] = 0
+    # TODO: 取引の説明欄を加える
+    # 'name'にデータがあれば投入
+    pd_data['note'] = pd_data.apply(lambda x:cancatNote(x),axis=1)
+    # 不要な列を削除する
+    pd_data = pd_data.drop(['count', 'type'], axis=1)
+    # 列の並び順を決める
     sort = ['id', 'date', 'amount', 'income', 'category', 'genre',
-            'place', 'name', 'comment', 'from_account', 'to_account']  # 列の並び順を決める
-    pd_data = pd_data.loc[:, sort]  # 列の並び替えを行う
+            'place', 'name', 'comment', 'from_account', 'to_account', 'note']
+    # 列の並び替えを行う
+    pd_data = pd_data.loc[:, sort]
+    # date列のTimestampを文字列型に変換
+    pd_data['date']=pd_data['date'].dt.strftime('%Y/%m/%d')
+    # NaNを空文字'-'に変換
+    pd_data = pd_data.fillna("")
+
+    #--- データ整形ここまで ---
+
 
     # ログをCSV出力
     pd_data.to_csv(
@@ -45,6 +68,7 @@ def main():
     # seleniumを閉じる
     finally:
         crawler.close()
+        print('close')
 
     # データ整形
     pd_data = cleanUp(data, config)
@@ -64,22 +88,29 @@ def main():
     # 共有設定したスプレッドシートキーを変数[SPREADSHEET_KEY]に格納する。
     SPREADSHEET_KEY = config['sheet']
 
-    sheet_name = str(config['year'])+str(config['month']).zfill(2)
-
-    # 共有設定したスプレッドシートのシート1を開く
+    # 共有設定したスプレッドシートを開く
+    sheet_name = "transactions"
     spread = gc.open_by_key(SPREADSHEET_KEY)
-    worksheets = spread.worksheets()
-    flg = False
-    for worksheet in worksheets:
-        if worksheet.title == sheet_name:
-            flg = True
-    if flg:
-        ws = spread.worksheet(sheet_name)
-    else:
-        ws = spread.add_worksheet(sheet_name, rows=str(
-            pd_data.shape[0]+10), cols=str(pd_data.shape[1]))
+    worksheets = spread.worksheet(sheet_name)
+    query = re.compile(r'^{}/{}.*$'.format(str(config['year']), str(config['month']).zfill(2)))
+    # query = re.compile(r'^2020\-06.*$')
+    find = worksheets.findall(query, in_column=2)
 
-    set_with_dataframe(ws, pd_data)
+    if len(find) > 0:
+        range_start = find[0].row
+        range_end = range_start
 
+        for f in find:
+            if f.row < range_start:
+                range_start = f.row
+            if f.row > range_end:
+                range_end = f.row
+
+        print('Remove range: {}-{}'.format(range_start,range_end))
+
+        worksheets.delete_rows(range_start, range_end)
+
+    worksheets.append_rows(pd_data.values.tolist())
+    worksheets.sort((2, 'asc'))
 
 main()

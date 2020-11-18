@@ -4,3 +4,5 @@ id: xxx@xxx.com
 pw: ***
 driver_path: remote
 headless: False
+secret: zaimapp-***.json
+sheet: ***-****
