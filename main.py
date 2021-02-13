@@ -8,17 +8,18 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
+
 def cancatNote(x):
-    tmp = x['name'] + ' | ' if x['name']!='' else ''
-    tmp += x.comment + ' | ' if x.comment!='' else ''
+    tmp = x['name'] + ' | ' if x['name'] != '' else ''
+    tmp += x.comment + ' | ' if x.comment != '' else ''
     tmp += x.place
     return tmp
 
-def cleanUp(data, config):
+
+def cleanUp(data, config, log=False):
     pd_data = pd.DataFrame(data)  # 取得したデータをDataFrame型へ変換
 
-
-    #--- データ整形 ---
+    # --- データ整形 ---
 
     # 計上する取引だけを抽出する（銀行間の移動等は除外）
     pd_data = pd_data.query("count=='常に含める'")
@@ -28,7 +29,7 @@ def cleanUp(data, config):
     pd_data.loc[pd_data['type'] == 'income', ['amount']] = 0
     # TODO: 取引の説明欄を加える
     # 'name'にデータがあれば投入
-    pd_data['note'] = pd_data.apply(lambda x:cancatNote(x),axis=1)
+    pd_data['note'] = pd_data.apply(lambda x: cancatNote(x), axis=1)
     # 不要な列を削除する
     pd_data = pd_data.drop(['count', 'type'], axis=1)
     # 列の並び順を決める
@@ -37,16 +38,15 @@ def cleanUp(data, config):
     # 列の並び替えを行う
     pd_data = pd_data.loc[:, sort]
     # date列のTimestampを文字列型に変換
-    pd_data['date']=pd_data['date'].dt.strftime('%Y/%m/%d')
+    pd_data['date'] = pd_data['date'].dt.strftime('%Y/%m/%d')
     # NaNを空文字'-'に変換
     pd_data = pd_data.fillna("")
 
-    #--- データ整形ここまで ---
-
-
-    # ログをCSV出力
-    pd_data.to_csv(
-        './log/zaim_{}{}_{}.csv'.format(config['year'], str(config['month']).zfill(2), datetime.datetime.now().strftime('%Y%m%d%H%M%S')))
+    # --- データ整形ここまで ---
+    if log:
+        # ログをCSV出力
+        pd_data.to_csv(
+            './log/zaim_{}{}_{}.csv'.format(config['year'], str(config['month']).zfill(2), datetime.datetime.now().strftime('%Y%m%d%H%M%S')))
 
     return pd_data
 
@@ -92,7 +92,8 @@ def main():
     sheet_name = "transactions"
     spread = gc.open_by_key(SPREADSHEET_KEY)
     worksheets = spread.worksheet(sheet_name)
-    query = re.compile(r'^{}/{}.*$'.format(str(config['year']), str(config['month']).zfill(2)))
+    query = re.compile(
+        r'^{}/{}.*$'.format(str(config['year']), str(config['month']).zfill(2)))
     # query = re.compile(r'^2020\-06.*$')
     find = worksheets.findall(query, in_column=2)
 
@@ -106,11 +107,12 @@ def main():
             if f.row > range_end:
                 range_end = f.row
 
-        print('Remove range: {}-{}'.format(range_start,range_end))
+        print('Remove range: {}-{}'.format(range_start, range_end))
 
         worksheets.delete_rows(range_start, range_end)
 
     worksheets.append_rows(pd_data.values.tolist())
     worksheets.sort((2, 'asc'))
+
 
 main()
